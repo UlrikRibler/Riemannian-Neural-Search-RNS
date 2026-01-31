@@ -47,7 +47,7 @@ The project is modularized into three core physical components:
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/your-repo/riemannian-neural-search.git
+    git clone https://github.com/ulrikribler/riemannian-neural-search.git
     cd riemannian-neural-search
     ```
 
