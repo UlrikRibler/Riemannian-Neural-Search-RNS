@@ -13,20 +13,36 @@ Crucially, this work introduces a novel retrieval mechanism: instead of simple N
 ## 1. Theoretical Foundation
 
 ### 1.1. The Geometry of Hierarchy
-Complex symbolic data (e.g., taxonomies, entailment graphs) exhibits exponential volume growth, which Euclidean space cannot embed without significant distortion. We utilize the **Lorentz Hyperboloid model** ($\mathbb{L}^d, g_x$), defined as the Riemannian manifold:
-$$ \mathcal{M} = \{ \mathbf{x} \in \mathbb{R}^{d+1} : \langle \mathbf{x}, \mathbf{x} \rangle_{\mathcal{L}} = -1/c, x_0 > 0 \} $$
+Complex symbolic data (e.g., taxonomies, entailment graphs) exhibits exponential volume growth, which Euclidean space cannot embed without significant distortion. We utilize the **Lorentz Hyperboloid model** (\(\mathbb{L}^d, g_x\)), defined as the Riemannian manifold:
+
+$$ 
+\mathcal{M} = \{ \mathbf{x} \in \mathbb{R}^{d+1} : \langle \mathbf{x}, \mathbf{x} \rangle_{\mathcal{L}} = -1/c, \quad x_0 > 0 \} 
+$$ 
+
 where $\langle \mathbf{x}, \mathbf{y} \rangle_{\mathcal{L}} = -x_0 y_0 + \sum_{i=1}^d x_i y_i$ is the Minkowski inner product and $c$ is the learnable curvature.
 
 ### 1.2. Riemannian Energy-Based Models (EBM)
 Standard IR assumes relevance is a deterministic distance. We argue that relevance is a density. We learn a scalar energy function $E_\phi: \mathcal{M} \to \mathbb{R}$ such that the probability density of valid documents on the manifold is given by the Boltzmann distribution:
-$$ p(\mathbf{x}) = \frac{e^{-E_\phi(\mathbf{x})}}{Z(\phi)} $$
+
+$$ 
+p(\mathbf{x}) = \frac{e^{-E_\phi(\mathbf{x})}}{Z(\phi)} 
+$$ 
+
 This EBM is trained via Noise Contrastive Estimation (NCE) directly on the curved surface, capturing the "gravitational field" of the semantic space.
 
 ### 1.3. Symplectic Hamiltonian Dynamics
 To retrieve documents for a query $q$, we sample from the posterior $p(d|q) \propto e^{-U(d; q)}$. The potential energy $U$ combines the query's pull and the corpus density:
-$$ U(\mathbf{z}) = \underbrace{\alpha \cdot d_{\mathcal{M}}(\mathbf{z}, q)^2}_{\text{Query Likelihood}} + \underbrace{\beta \cdot E_\phi(\mathbf{z})}_{\text{Learned Prior}} $$
+
+$$ 
+U(\mathbf{z}) = \underbrace{\alpha \cdot d_{\mathcal{M}}(\mathbf{z}, q)^2}_{ \text{Query Likelihood}} + \underbrace{\beta \cdot E_\phi(\mathbf{z})}_{ \text{Learned Prior}} 
+$$ 
+
 We simulate a particle evolving under Hamiltonian dynamics:
-$$ \frac{d\mathbf{q}}{dt} = \nabla_{\mathbf{p}} H, \quad \frac{d\mathbf{p}}{dt} = -\nabla_{\mathbf{q}} H $$
+
+$$ 
+\frac{d\mathbf{q}}{dt} = \nabla_{\mathbf{p}} H, \quad \frac{d\mathbf{p}}{dt} = -\nabla_{\mathbf{q}} H 
+$$ 
+
 This symplectic integration allows the search agent to traverse geodesic paths, utilizing momentum to escape local minima and explore multimodal relevance distributions.
 
 ## 2. Methodology & Architecture
@@ -34,7 +50,7 @@ This symplectic integration allows the search agent to traverse geodesic paths, 
 The system is implemented in **JAX** for end-to-end differentiability and hardware acceleration.
 
 ### Module Overview
-*   **`src.geometry.lorentz`**: Numerical backend implementing the pseudo-Riemannian metric tensors, exponential maps ($\text{Exp}_x$), and logarithmic maps ($\text{Log}_x$).
+*   **`src.geometry.lorentz`**: Numerical backend implementing the pseudo-Riemannian metric tensors, exponential maps (\(\text{Exp}_x\)), and logarithmic maps (\(\text{Log}_x\)).
 *   **`src.models.encoder` (HyperbolicGCN)**: A Graph Convolutional Network that operates in the tangent space $T_x \mathcal{M}$, performing message passing using parallel transport approximations.
 *   **`src.models.density` (RiemannianEBM)**: A neural network defined on the manifold that estimates the gradient field of the data distribution.
 *   **`src.dynamics.hmc_sampler`**: A symplectic integrator (Generalized Leapfrog) solving the equations of motion on $\mathbb{L}^d$.
