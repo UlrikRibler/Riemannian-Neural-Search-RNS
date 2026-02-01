@@ -75,7 +75,7 @@ To reproduce the experiments:
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/ulrikil/riemannian-neural-search.git
+git clone https://github.com/ulriribler/riemannian-neural-search.git
 cd riemannian-neural-search
 
 # 2. Install dependencies
@@ -96,7 +96,7 @@ If you use this code in your research, please cite:
   year = {2026},
   publisher = {GitHub},
   journal = {GitHub repository},
-  url = {https://github.com/ulrikil/riemannian-neural-search}
+  url = {https://github.com/ulrikribler/riemannian-neural-search}
 }
 ```
 
