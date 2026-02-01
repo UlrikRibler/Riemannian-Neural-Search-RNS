@@ -4,46 +4,50 @@ import matplotlib.pyplot as plt
 import jax
 import jax.numpy as jnp
 import optax
+import numpy as np
 from functools import partial
 
 # Add project root to path
 sys.path.append(os.getcwd())
 
 from src.geometry.lorentz import LorentzModel
-from src.geometry.manifold import PoincareBall # For visualization/HMC conversion
+from src.geometry.manifold import PoincareBall
 from src.models.encoder import HyperbolicGCN
-from src.models.losses import hyperbolic_info_nce_loss
+from src.models.density import RiemannianEBM
 from src.dynamics.hmc_sampler import RiemannianHMC
-from src.data.synthetic import generate_sbm_graph
+from src.data.wordnet import WordNetLoader
+from src.evaluation.metrics import Evaluator
 
 def run_experiment():
-    print("=== Riemannian Neural Search: Upgrade (Lorentz + Learnable c + Density Metric) ===")
+    print("=== Riemannian Neural Search: Upgrade (World-Class Standard) ===")
     
-    # --- 1. Data Generation ---
-    print("\n[Phase 1] Generating Synthetic Web Graph...")
-    key = jax.random.PRNGKey(42)
+    # --- 1. Data Generation (WordNet) ---
+    print("\n[Phase 1] Loading WordNet Mammals Subtree...")
+    loader = WordNetLoader()
+    adj, features, node_list, closure = loader.load_graph()
     
-    NUM_NODES = 100
-    NUM_CLUSTERS = 3 
-    FEAT_DIM = 16
+    num_nodes = adj.shape[0]
+    feat_dim = features.shape[1]
+    print(f"Graph Loaded: {num_nodes} nodes, {feat_dim} features.")
     
-    key, subkey = jax.random.split(key)
-    adj, features, labels = generate_sbm_graph(subkey, NUM_NODES, NUM_CLUSTERS, feature_dim=FEAT_DIM)
+    # Convert to JAX arrays
+    adj = jnp.array(adj)
+    features = jnp.array(features)
+    # closure is used for evaluation later (numpy is fine)
     
-    print(f"Graph Created: {NUM_NODES} nodes, {NUM_CLUSTERS} clusters.")
-    
-    # --- 2. Model Training (Lorentz + Learnable c) ---
-    print("\n[Phase 2] Training Hyperbolic Index (Lorentz Backend)...")
+    # --- 2. Model Training (Hyperbolic GCN) ---
+    print("\n[Phase 2] Training Hyperbolic Encoder...")
     
     manifold = LorentzModel()
-    # Encoder: Input(16) -> Hidden(32) -> Output(2)
-    # Output is 2 dim in Tangent space -> 3 dim on Hyperboloid
-    model = HyperbolicGCN([FEAT_DIM, 32, 2], manifold)
+    # Encoder: Input -> Hidden(32) -> Output(2 dim tangent -> 3 dim Lorentz)
+    # We use 2D hyperbolic space for visualization ease
+    EMB_DIM = 2
+    model = HyperbolicGCN([feat_dim, 32, EMB_DIM], manifold)
     
+    key = jax.random.PRNGKey(42)
     key, subkey = jax.random.split(key)
     params = model.init_params(subkey)
     
-    # Optimizer
     optimizer = optax.adam(learning_rate=0.01)
     opt_state = optimizer.init(params)
     
@@ -51,27 +55,32 @@ def run_experiment():
     def train_step(params, opt_state, x, adj):
         def loss_fn(p):
             c = jax.nn.softplus(p["c"])
-            embeddings = model.forward(p, x, adj) # Embeddings are (N, 3) Lorentz
+            embeddings = model.forward(p, x, adj)
             
-            # Pairwise distance matrix for InfoNCE
-            # We sample a batch for efficiency
-            idxs = jax.random.randint(jax.random.PRNGKey(0), (32,), 0, NUM_NODES)
+            # Sample batch for InfoNCE
+            idxs = jax.random.randint(jax.random.PRNGKey(0), (64,), 0, num_nodes)
             batch_emb = embeddings[idxs]
-            batch_labels = labels[idxs]
             
+            # Ground truth positives from Adjacency
+            # mask_pos[i, j] = 1 if i and j are connected
+            batch_adj = adj[idxs][:, idxs]
+            mask_pos = batch_adj
+            
+            # Distances
             dists = manifold.dist(jnp.expand_dims(batch_emb, 1), jnp.expand_dims(batch_emb, 0), c)
             
-            label_match = batch_labels[:, None] == batch_labels[None, :]
-            mask_pos = label_match.astype(jnp.float32) - jnp.eye(32)
-            
             logits = -dists / 0.1
+            # Remove self-contrast for softmax denominator if needed, or keep it (standard InfoNCE usually excludes self from positive set if it's the anchor)
+            # Here we treat neighbors as positives. Self is typically a positive in adj (self-loop).
             
-            exp_logits = jnp.exp(logits) * (1 - jnp.eye(32))
+            # LogSoftmax: log( exp(pos) / sum(exp(all)) )
+            exp_logits = jnp.exp(logits)
+            # Avoid numerical instability
             log_prob = logits - jnp.log(exp_logits.sum(1, keepdims=True) + 1e-9)
             
+            # Loss = - sum(mask * log_prob) / sum(mask)
             loss = -(mask_pos * log_prob).sum() / (mask_pos.sum() + 1e-9)
             
-            # Regularizer for c to prevent explosion/collapse
             loss += 0.01 * (c - 1.0)**2
             return loss
 
@@ -80,109 +89,166 @@ def run_experiment():
         params = optax.apply_updates(params, updates)
         return params, opt_state, loss
 
-    # Train Loop
-    print("Training...")
+    print("Training Encoder...")
     for epoch in range(201):
         params, opt_state, loss = train_step(params, opt_state, features, adj)
         if epoch % 50 == 0:
             c_val = jax.nn.softplus(params["c"])
-            print(f"Epoch {epoch}: Loss = {loss:.4f} | Curvature c = {c_val:.4f}")
-
-    # Indexing: Get final embeddings in Lorentz
-    final_emb_lorentz = model.forward(params, features, adj)
+            print(f"Epoch {epoch}: Loss = {loss:.4f} | c = {c_val:.4f}")
+            
     final_c = jax.nn.softplus(params["c"])
-    
-    # Convert to Poincaré for Visualization/HMC
+    final_emb_lorentz = model.forward(params, features, adj)
     final_emb_poincare = manifold.to_poincare(final_emb_lorentz, final_c)
     
-    print(f"\nFinal Curvature Learned: {final_c:.4f}")
+    # --- 3. Learnable Density (EBM) ---
+    print("\n[Phase 3] Training Riemannian Energy-Based Model...")
     
-    # --- 3. Retrieval (Data-Driven HMC) ---
-    print("\n[Phase 3] The 'Physicist' Search (Data-Driven)...")
+    ebm = RiemannianEBM(input_dim=EMB_DIM, hidden_dims=[32, 32], manifold=manifold)
+    key, subkey = jax.random.split(key)
+    ebm_params = ebm.init_params(subkey)
     
-    # Create a Poincaré Manifold instance with the LEARNED curvature
-    poincare_manifold = PoincareBall(c=final_c)
+    ebm_opt = optax.adam(learning_rate=0.005)
+    ebm_opt_state = ebm_opt.init(ebm_params)
     
-    # Targets (Centroids of Cluster 0 and 1) in Poincaré
-    mask0 = labels == 0
-    mask1 = labels == 1
-    # Simple arithmetic mean is not geodesic center, but close enough for demo in Poincare
-    c0 = jnp.mean(final_emb_poincare[mask0], axis=0)
-    c1 = jnp.mean(final_emb_poincare[mask1], axis=0)
-    
-    # DATA-DRIVEN POTENTIAL
-    # We add a term that "pulls" the particle towards high-density regions of documents.
-    # U_density(q) = -alpha * log( sum_i exp( -d(q, doc_i)^2 / sigma ) )
-    # This is Kernel Density Estimation.
-    
-    # docs_subset = final_emb_poincare[::10] # Still too slow
-    # APPROXIMATION: Use Cluster Centers as proxy for density peaks
-    # This simulates G(x) being high near known topics.
-    density_proxies = jnp.stack([c0, c1]) # Use the relevant centroids
-    
-    def search_potential(q):
-        # 1. Query Relevance (Ambiguous: close to c0 AND c1)
-        d0 = poincare_manifold.dist(q, c0)
-        d1 = poincare_manifold.dist(q, c1)
-        u_query = -jnp.log(jnp.exp(-2.0 * d0**2) + jnp.exp(-2.0 * d1**2) + 1e-9)
-        
-        # 2. Data Density (The "Data Driven" Part)
-        # Pull towards actual documents to avoid "voids"
-        d_docs = poincare_manifold.dist(jnp.expand_dims(q, 0), density_proxies)
-        # KDE energy
-        u_density = -0.5 * jax.scipy.special.logsumexp(-d_docs**2 / 0.2)
-        
-        return jnp.squeeze(u_query + u_density)
-        
-    def metric_fn(q):
-        # Base metric: Conformal factor
-        lam = poincare_manifold.lambda_x(q)
-        # We can also modulate mass by density here, but Potential modification is often more stable 
-        # for shaping the landscape than changing the Kinetic energy metric G directly 
-        # (which affects step size adaptation).
-        # We stick to the manifold metric for G.
-        return 1.0 / (lam**2), q.shape[-1] * jnp.log(lam**2)
-
-    hmc = RiemannianHMC(search_potential, metric_fn, step_size=0.05, n_steps=5)
-    
-    # Run Search
-    q_curr = jnp.zeros(2) 
-    trajectory = []
-    
-    key = jax.random.PRNGKey(202)
-    for _ in range(50):
+    @jax.jit
+    def ebm_train_step(ebm_params, opt_state, data_emb, key, c):
+        # Generate Noise: Uniform in Poincare Ball -> Mapped to Lorentz
+        # Or wrap Gaussian in Tangent Space
         key, subkey = jax.random.split(key)
-        q_curr, _ = hmc.step(q_curr, subkey)
-        trajectory.append(q_curr)
+        # Sample noise in tangent space of origin
+        noise_tan = jax.random.normal(subkey, (data_emb.shape[0], EMB_DIM)) * 2.0 # Wide variance
+        noise_emb = manifold.exp_map0(noise_tan, c)
         
-    trajectory = jnp.array(trajectory)
+        def loss_fn(p):
+            return ebm.loss_fn(p, data_emb, noise_emb, c)
+            
+        loss, grads = jax.value_and_grad(loss_fn)(ebm_params)
+        updates, opt_state = ebm_opt.update(grads, opt_state)
+        ebm_params = optax.apply_updates(ebm_params, updates)
+        return ebm_params, opt_state, loss
+
+    print("Training EBM...")
+    for epoch in range(201):
+        key, subkey = jax.random.split(key)
+        ebm_params, ebm_opt_state, loss = ebm_train_step(ebm_params, ebm_opt_state, final_emb_lorentz, subkey, final_c)
+        if epoch % 50 == 0:
+            print(f"EBM Epoch {epoch}: Loss = {loss:.4f}")
+
+    # --- 4. Evaluation (Metrics) ---
+    print("\n[Phase 4] Rigorous Evaluation...")
+    evaluator = Evaluator(np.array(final_emb_poincare), closure)
     
-    # --- 4. Visualization ---
-    print("\n[Phase 4] Visualizing Enhanced Search...")
+    # Select test queries (random subset of nodes)
+    # We select nodes that have at least one child/descendant
+    valid_queries = [i for i in range(num_nodes) if np.sum(closure[i]) > 1] # >1 because self is included
+    np.random.seed(42)
+    test_queries = np.random.choice(valid_queries, size=min(20, len(valid_queries)), replace=False)
+    
+    print(f"Evaluating on {len(test_queries)} queries...")
+    
+    # Baseline: Nearest Neighbor
+    results_nn = evaluator.baseline_search(test_queries, k=10)
+    metrics_nn = evaluator.compute_metrics(test_queries, results_nn)
+    print("Baseline (Nearest Neighbor) Metrics:")
+    print(metrics_nn)
+    
+    # HMC Search Evaluation? 
+    # Usually HMC is for finding ONE mode or sampling. 
+    # For Retrieval, we might just define the score as EBM energy?
+    # Or we can run HMC from origin and see where it lands (Generative)?
+    # The prompt asks to "Compare HMC-based search against... Nearest Neighbor".
+    # This implies HMC is used to FIND items.
+    # Task: Given Query Q, find relevant items.
+    # Potential U(z) = Dist(z, Q) + lambda * EBM(z).
+    # We sample K particles.
+    
+    print("Evaluating HMC-based Search...")
+    
+    # Create HMC sampler
+    # We define a JIT-compiled function for the loop to avoid recompilation
+    
+    @jax.jit
+    def single_query_search(key, start_q, target_emb, ebm_params, c_val):
+        # Re-create manifold with the scalar/tracer c_val
+        pm = PoincareBall(c=c_val)
+        
+        def potential(q):
+            # 1. Query Relevance
+            d = pm.dist(q, target_emb)
+            u_query = 2.0 * d 
+            
+            # 2. Density Support
+            q_lorentz = pm.to_lorentz(q)
+            e_val = ebm.forward(ebm_params, jnp.expand_dims(q_lorentz, 0), c_val)
+            u_density = jnp.squeeze(e_val)
+            
+            return u_query + 0.5 * u_density
+            
+        def metric(q):
+            lam = pm.lambda_x(q)
+            return 1.0 / (lam**2), q.shape[-1] * jnp.log(lam**2)
+            
+        # Initialize HMC inside JIT
+        hmc = RiemannianHMC(potential, metric, step_size=0.1, n_steps=3)
+        
+        def scan_step(carry, key):
+            q_curr = carry
+            q_next, info = hmc.step(q_curr, key)
+            return q_next, q_next
+            
+        # Burn-in + Samples
+        total_steps = 15 # 10 burn + 5 samples
+        keys = jax.random.split(key, total_steps)
+        final_q, samples = jax.lax.scan(scan_step, start_q, keys)
+        
+        return samples[-5:] # Return last 5
+    
+    results_hmc = []
+    print(f"Running optimized HMC search for {len(test_queries)} queries...")
+    
+    for i, q_idx in enumerate(test_queries):
+        target_emb = final_emb_poincare[q_idx]
+        start_q = jnp.zeros(EMB_DIM)
+        key_search = jax.random.PRNGKey(q_idx)
+        
+        samples = single_query_search(key_search, start_q, target_emb, ebm_params, final_c)
+        
+        # Convert samples to retrieved indices
+        # This part is fast enough in python or can be jitted too
+        retrieved_indices = []
+        for sample in samples:
+            dists = jnp.linalg.norm(final_emb_poincare - sample, axis=1)
+            idx = jnp.argmin(dists)
+            retrieved_indices.append(int(idx))
+            
+        results_hmc.append(list(set(retrieved_indices)))
+        
+    metrics_hmc = evaluator.compute_metrics(test_queries, results_hmc)
+    print("HMC Search Metrics:")
+    print(metrics_hmc)
+    # --- 5. Visualization (Optional) ---
+    print("\n[Phase 5] Saving Visualization...")
     plt.figure(figsize=(10, 10))
-    
-    # Boundary (Poincaré radius = 1/sqrt(c))
     radius = 1.0 / jnp.sqrt(final_c)
-    circle = plt.Circle((0, 0), radius, color='black', fill=False, linestyle='--')
+    circle = plt.Circle((0, 0), radius, color='k', fill=False, linestyle='--')
     plt.gca().add_artist(circle)
     
-    # Documents
-    colors = ['r', 'g', 'b']
-    for i in range(NUM_CLUSTERS):
-        cluster_pts = final_emb_poincare[labels == i]
-        plt.scatter(cluster_pts[:, 0], cluster_pts[:, 1], c=colors[i], alpha=0.3, label=f'Topic {i}')
-        
-    # Search
-    plt.plot(trajectory[:, 0], trajectory[:, 1], 'k.-', alpha=0.6, linewidth=1.0, label='HMC Searcher')
-    plt.plot(c0[0], c0[1], 'rx', markersize=12, label='Target 0')
-    plt.plot(c1[0], c1[1], 'gx', markersize=12, label='Target 1')
+    # Plot all nodes
+    plt.scatter(final_emb_poincare[:, 0], final_emb_poincare[:, 1], alpha=0.5, s=20, c='b', label='WordNet Nodes')
+    
+    # Highlight a query and its targets
+    q_demo = test_queries[0]
+    targets = np.where(closure[q_demo] > 0)[0]
+    
+    plt.scatter(final_emb_poincare[q_demo, 0], final_emb_poincare[q_demo, 1], c='r', s=100, marker='*', label='Query')
+    plt.scatter(final_emb_poincare[targets, 0], final_emb_poincare[targets, 1], c='g', s=50, alpha=0.5, label='Entailment')
     
     plt.xlim(-radius*1.1, radius*1.1)
     plt.ylim(-radius*1.1, radius*1.1)
     plt.legend()
-    plt.title(f"RNS Upgrade: Lorentz Training (c={final_c:.2f}) + Density-Aware HMC")
-    plt.savefig("rns_upgrade_result.png")
-    print("Result saved to 'rns_upgrade_result.png'")
-    
+    plt.title(f"RNS Upgrade: WordNet Mammals (MAP={metrics_hmc['mAP']:.3f})")
+    plt.savefig("rns_wordnet_result.png")
+    print("Result saved.")
+
 if __name__ == "__main__":
     run_experiment()

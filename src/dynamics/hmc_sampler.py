@@ -8,12 +8,18 @@ class RiemannianHMC:
         """
         Riemannian Manifold Hamiltonian Monte Carlo (RMHMC) Sampler.
         
+        This sampler navigates the learned hyperbolic manifold to retrieve documents.
+        It simulates a particle moving in a potential energy landscape defined by:
+        1. The Query (attraction).
+        2. The Riemannian EBM (density support).
+        
+        The symplectic integration ensures energy conservation and efficient exploration
+        of the curved space.
+        
         Args:
             potential_fn: Function U(q) returning scalar potential energy.
-            metric_fn: Function G(q) returning the metric tensor (or its properties).
-                       For efficiency, we assume metric_fn returns (G_inv, log_det_G).
-                       If G is isotropic lambda(x)^2 I, G_inv = lambda(x)^-2 I.
-            step_size: Integrator step size.
+            metric_fn: Function G(q) returning the metric tensor components.
+            step_size: Integrator step size (dt).
             n_steps: Number of leapfrog steps per sample.
         """
         self.potential_fn = potential_fn

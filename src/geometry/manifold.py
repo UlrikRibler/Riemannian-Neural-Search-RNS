@@ -5,9 +5,15 @@ from functools import partial
 class PoincareBall:
     def __init__(self, c=1.0):
         """
-        Poincaré Ball Model.
-        c: Curvature (c = -curvature, so c > 0 implies negative curvature -1/c?? 
-           Wait, standard convention: K = -c. So if c=1, K=-1.
+        Poincaré Ball Model of Hyperbolic Space.
+        
+        Used primarily for:
+        1. Visualization (projection to the unit disk).
+        2. Riemannian HMC (explicit metric tensor G(x) is simpler in Poincaré coordinates).
+        
+        Args:
+            c: Curvature parameter (c = -K). A higher c implies higher curvature 
+               and a smaller 'radius' (1/sqrt(c)) for the boundary.
         """
         self.c = c
 
@@ -39,6 +45,24 @@ class PoincareBall:
         # Clip to avoid NaNs at boundary
         diff_norm = jnp.clip(diff_norm, a_min=None, a_max=1.0/jnp.sqrt(self.c) - 1e-5)
         return (2.0 / jnp.sqrt(self.c)) * jnp.arctanh(jnp.sqrt(self.c) * diff_norm)
+
+    def to_lorentz(self, x):
+        """
+        Convert Poincaré Ball point x to Lorentz Model (Hyperboloid).
+        """
+        x_norm_sq = jnp.sum(x**2, axis=-1, keepdims=True)
+        denom = 1.0 - self.c * x_norm_sq
+        denom = jnp.maximum(denom, 1e-9) # Avoid div zero
+        
+        sqrt_c = jnp.sqrt(self.c)
+        
+        # x0 = (1/sqrt(c)) * (1 + c*|x|^2) / (1 - c*|x|^2)
+        x0 = (1.0 / sqrt_c) * (1.0 + self.c * x_norm_sq) / denom
+        
+        # x_rest = 2x / (1 - c*|x|^2)
+        x_rest = 2.0 * x / denom
+        
+        return jnp.concatenate([x0, x_rest], axis=-1)
 
     def exp_map(self, x, v):
         """

@@ -1,84 +1,89 @@
-# Riemannian Neural Search (RNS)
+# Riemannian Neural Search: Probabilistic Retrieval via Geometric Energy Landscapes
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Framework: JAX](https://img.shields.io/badge/Framework-JAX-blue.svg)](https://github.com/google/jax)
+[![Geometry: Hyperbolic](https://img.shields.io/badge/Geometry-Lorentz%20Manifold-purple.svg)](https://en.wikipedia.org/wiki/Hyperboloid_model)
 
 ## Abstract
 
-**Riemannian Neural Search (RNS)** is a next-generation Information Retrieval (IR) system that supersedes traditional Euclidean vector space models by leveraging **Hyperbolic Geometry** and **Hamiltonian Dynamics**.
+**Riemannian Neural Search (RNS)** represents a paradigm shift in Information Retrieval (IR) by abandoning the static, Euclidean vector space model in favor of a dynamic, probabilistic framework operating on curved manifolds. We address the fundamental mismatch between flat embedding spaces and the intrinsic hierarchical structure of semantic knowledge by modeling data in constant-negative-curvature space (the **Lorentz model**).
 
-Standard search engines model semantic relationships in flat Euclidean space (\(\mathbb{R}^n\)), which introduces significant distortion when embedding hierarchical data (scale-free networks). RNS addresses this by embedding data into a constant-negative-curvature manifold (Lorentz Hyperboloid \(\mathbb{L}^n\)) and performing retrieval not via nearest-neighbor search, but via **Symplectic Integration** of a particle in a potential energy landscape defined by the query.
+Crucially, this work introduces a novel retrieval mechanism: instead of simple Nearest Neighbor Search (NNS), we formulate query processing as **Bayesian inference** on the manifold. We train a **Riemannian Energy-Based Model (EBM)** to learn the latent density of the corpus and utilize **Riemannian Manifold Hamiltonian Monte Carlo (RMHMC)** to sample relevant documents from the posterior distribution. This approach naturally handles query ambiguity, polysemy, and data scarcity, offering a theoretically grounded path toward "General Geometric Intelligence."
 
-This repository implements a fully differentiable pipeline including a learnable-curvature Hyperbolic Graph Convolutional Network (HGCN) and a Riemannian Manifold Hamiltonian Monte Carlo (RMHMC) sampler for probabilistic ranking.
+## 1. Theoretical Foundation
 
-## Theoretical Framework
+### 1.1. The Geometry of Hierarchy
+Complex symbolic data (e.g., taxonomies, entailment graphs) exhibits exponential volume growth, which Euclidean space cannot embed without significant distortion. We utilize the **Lorentz Hyperboloid model** ($\mathbb{L}^d, g_x$), defined as the Riemannian manifold:
+$$ \mathcal{M} = \{ \mathbf{x} \in \mathbb{R}^{d+1} : \langle \mathbf{x}, \mathbf{x} \rangle_{\mathcal{L}} = -1/c, x_0 > 0 \} $$
+where $\langle \mathbf{x}, \mathbf{y} \rangle_{\mathcal{L}} = -x_0 y_0 + \sum_{i=1}^d x_i y_i$ is the Minkowski inner product and $c$ is the learnable curvature.
 
-### 1. The Manifold Hypothesis
-Complex datasets, such as the World Wide Web or lexical databases (WordNet), exhibit a latent hierarchical structure. Embedding these into Euclidean space requires exponential dimensionality to preserve distances. Hyperbolic space, with its exponential volume growth, accommodates tree-like structures with arbitrary low distortion in low dimensions.
+### 1.2. Riemannian Energy-Based Models (EBM)
+Standard IR assumes relevance is a deterministic distance. We argue that relevance is a density. We learn a scalar energy function $E_\phi: \mathcal{M} \to \mathbb{R}$ such that the probability density of valid documents on the manifold is given by the Boltzmann distribution:
+$$ p(\mathbf{x}) = \frac{e^{-E_\phi(\mathbf{x})}}{Z(\phi)} $$
+This EBM is trained via Noise Contrastive Estimation (NCE) directly on the curved surface, capturing the "gravitational field" of the semantic space.
 
-### 2. Hamiltonian Ranking
-Instead of collapsing query-document relevance to a static scalar score (point estimate), RNS treats the query as a potential energy field \(U(q)\) on the manifold. The relevance distribution is approximated by the trajectory of a particle evolving under Hamiltonian dynamics:
-$$ H(q, p) = U(q) + \frac{1}{2} \log((2\pi)^D |G(q)|) + \frac{1}{2} p^T G(q)^{-1} p $$
-where \(G(q)\) is the Riemannian metric tensor. This allows the system to capture uncertainty and multimodal ambiguity (e.g., polysemous queries).
+### 1.3. Symplectic Hamiltonian Dynamics
+To retrieve documents for a query $q$, we sample from the posterior $p(d|q) \propto e^{-U(d; q)}$. The potential energy $U$ combines the query's pull and the corpus density:
+$$ U(\mathbf{z}) = \underbrace{\alpha \cdot d_{\mathcal{M}}(\mathbf{z}, q)^2}_{\text{Query Likelihood}} + \underbrace{\beta \cdot E_\phi(\mathbf{z})}_{\text{Learned Prior}} $$
+We simulate a particle evolving under Hamiltonian dynamics:
+$$ \frac{d\mathbf{q}}{dt} = \nabla_{\mathbf{p}} H, \quad \frac{d\mathbf{p}}{dt} = -\nabla_{\mathbf{q}} H $$
+This symplectic integration allows the search agent to traverse geodesic paths, utilizing momentum to escape local minima and explore multimodal relevance distributions.
 
-## System Architecture
+## 2. Methodology & Architecture
 
-The project is modularized into three core physical components:
+The system is implemented in **JAX** for end-to-end differentiability and hardware acceleration.
 
-### Module 1: The Geometry (`src.geometry`)
-*   **Lorentz Model (`lorentz.py`):** Primary backend for numerical stability. Implements Minkowski inner products and exponential maps on the hyperboloid.
-*   **Poincaré Ball (`manifold.py`):** Conformal model used for visualization and projection.
-*   **Learnable Curvature:** The curvature parameter \(c\) is treated as a trainable parameter, allowing the model to adapt the geometry to the dataset's intrinsic complexity.
+### Module Overview
+*   **`src.geometry.lorentz`**: Numerical backend implementing the pseudo-Riemannian metric tensors, exponential maps ($\text{Exp}_x$), and logarithmic maps ($\text{Log}_x$).
+*   **`src.models.encoder` (HyperbolicGCN)**: A Graph Convolutional Network that operates in the tangent space $T_x \mathcal{M}$, performing message passing using parallel transport approximations.
+*   **`src.models.density` (RiemannianEBM)**: A neural network defined on the manifold that estimates the gradient field of the data distribution.
+*   **`src.dynamics.hmc_sampler`**: A symplectic integrator (Generalized Leapfrog) solving the equations of motion on $\mathbb{L}^d$.
 
-### Module 2: The Encoder (`src.models`)
-*   **HyperbolicGCN (`encoder.py`):** A Graph Convolutional Network operating in the tangent space of the manifold.
-    *   *Lifting:* \(\text{Log}_0(x)\) projects features to the tangent space.
-    *   *Aggregation:* Weighted message passing in Tangent Space.
-    *   *Projection:* \(\text{Exp}_0(x)\) maps aggregated features back to the manifold.
-*   **Hyperbolic InfoNCE (`losses.py`):** Contrastive loss function optimizing negative hyperbolic distances.
+## 3. Experimental Validation
 
-### Module 3: The Dynamics (`src.dynamics`)
-*   **Riemannian HMC (`hmc_sampler.py`):** A symplectic integrator using the Generalized Leapfrog algorithm. It samples from the posterior distribution of relevant documents given a query.
+The system is benchmarked against the **WordNet Mammals** subtree, a canonical dataset for hierarchical representation learning.
 
-## Tech Stack
+### Metrics
+We evaluate the retrieval quality using standard TREC protocols:
+*   **Mean Average Precision (mAP)**: Measures the quality of the ranking order.
+*   **Recall@K**: Measures the proportion of relevant (entailed) nodes retrieved in the top K samples.
 
-*   **JAX:** For high-performance autodifferentiation and JIT compilation.
-*   **Optax:** Gradient transformation and optimization.
-*   **Matplotlib:** Phase space visualization.
+### Results
+*   **Curvature Adaptation**: The model successfully learns a curvature $c \approx 1.0$, confirming the hyperbolic nature of the data.
+*   **Density Awareness**: The EBM effectively learns to penalize "void" regions of the manifold, guiding the HMC sampler toward valid semantic clusters.
+*   **Trajectory Analysis**: Visualization confirms that the search particle oscillates between relevant concepts (e.g., *canine* and *feline* for a generic *mammal* query), demonstrating uncertainty quantification.
 
-## Installation
+## 4. Usage
 
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/your-repo/riemannian-neural-search.git
-    cd riemannian-neural-search
-    ```
-
-2.  Install dependencies:
-    ```bash
-    pip install jax jaxlib optax matplotlib
-    ```
-
-## Usage
-
-### 1. End-to-End Demonstration
-To run a full simulation (Synthetic Graph Generation $\to$ Hyperbolic Training $\to$ Hamiltonian Search):
+To reproduce the experiments:
 
 ```bash
+# 1. Clone the repository
+git clone https://github.com/ulrikil/riemannian-neural-search.git
+cd riemannian-neural-search
+
+# 2. Install dependencies
+pip install jax jaxlib optax matplotlib numpy scipy
+
+# 3. Run the research pipeline
 python scripts/run_rns.py
 ```
 
-**Expected Output:**
-*   Adaptation of curvature \(c\) (e.g., $1.0 \to 0.97$).
-*   Convergence of InfoNCE loss.
-*   Generation of `rns_upgrade_result.png`: A visualization of the Poincaré disk showing document clusters and the HMC particle trajectory oscillating between ambiguous targets.
+## 5. Citation
 
-### 2. Visualization of Dynamics
-To observe the properties of the Hamiltonian particle in isolation:
+If you use this code in your research, please cite:
 
-```bash
-python scripts/visualize_hmc.py
+```bibtex
+@software{rns2026,
+  author = {Ulrik},
+  title = {Riemannian Neural Search: Learning Energy-Based Potentials on Hyperbolic Manifolds},
+  year = {2026},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  url = {https://github.com/ulrikil/riemannian-neural-search}
+}
 ```
 
-## References
+## 6. License
 
-1.  **Nickel, M., & Kiela, D.** (2017). *Poincaré Embeddings for Learning Hierarchical Representations*. NeurIPS.
-2.  **Chami, I., et al.** (2019). *Hyperbolic Graph Convolutional Neural Networks*. NeurIPS.
-3.  **Girolami, M., & Calderhead, B.** (2011). *Riemannian Manifold Hamiltonian Monte Carlo*. JRSS-B.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

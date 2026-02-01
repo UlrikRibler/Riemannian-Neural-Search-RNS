@@ -53,9 +53,15 @@ class HyperbolicGCNLayer:
 class HyperbolicGCN:
     def __init__(self, layer_sizes, manifold=None):
         """
-        Multi-layer Hyperbolic GCN.
-        layer_sizes: List of integers [input_dim, hidden_dim, ..., output_dim]
-        manifold: Instance of LorentzModel
+        Hyperbolic Graph Convolutional Network (HGCN).
+        
+        This network learns to embed hierarchical graph data into Hyperbolic space (Lorentz model).
+        It performs graph convolution operations in the tangent space of the manifold,
+        leveraging the logarithmic and exponential maps for 'lifting' and 'projecting'.
+        
+        Args:
+            layer_sizes: List of integers [input_dim, hidden_dim, ..., output_dim]
+            manifold: Instance of LorentzModel.
         """
         if manifold is None:
             self.manifold = LorentzModel()

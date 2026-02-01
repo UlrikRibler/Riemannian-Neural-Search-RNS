@@ -4,9 +4,14 @@ import jax.numpy as jnp
 class LorentzModel:
     def __init__(self):
         """
-        Lorentz (Hyperboloid) Model.
-        Points x satisfy <x, x>_L = -1/c (we usually assume c=1 for the structural definition, 
-        and handle curvature via scaling).
+        Lorentz (Hyperboloid) Manifold Model.
+        
+        This class serves as the primary geometric backend for the Riemannian Neural Search system.
+        It implements the Hyperboloid model of hyperbolic space, defined as:
+        H^n = {x \in R^{n+1} : <x, x>_L = -1/c, x_0 > 0}
+        
+        The Lorentz model is preferred for optimization and numerical stability compared 
+        to the Poincaré ball, especially for deep learning (Hyperbolic GCNs).
         
         Metric signature: (-1, 1, 1, ... 1).
         """
